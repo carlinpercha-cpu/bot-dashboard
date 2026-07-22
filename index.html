@@ -41,6 +41,24 @@ header{border-bottom:1px solid var(--line);padding:22px 0;margin-bottom:36px}
   text-align:right;line-height:1.8}
 .heroside b{color:var(--paper);font-weight:600}
 
+/* split cards */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);margin:0 0 1px}
+.half{background:var(--ink);padding:18px 20px}
+.half .k{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--mute);
+  letter-spacing:.12em;text-transform:uppercase;margin-bottom:9px}
+.half .v{font-family:'IBM Plex Mono',monospace;font-size:26px;font-weight:600;font-variant-numeric:tabular-nums}
+.half .n{font-size:11.5px;color:var(--mute);margin-top:7px;line-height:1.5}
+.bework{background:var(--slate);padding:20px 22px;margin-bottom:44px;border-left:2px solid var(--amber)}
+.bemain .k{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mute);
+  letter-spacing:.06em;margin-bottom:12px}
+.betrack{height:3px;background:var(--line);position:relative;border-radius:2px}
+.bezone{position:absolute;top:0;bottom:0;background:var(--down);opacity:.55;border-radius:2px}
+.beknob{position:absolute;top:50%;width:10px;height:10px;border-radius:50%;background:var(--paper);
+  transform:translate(-50%,-50%);box-shadow:0 0 0 3px var(--slate)}
+.bemain .n{font-size:12px;color:var(--mute);margin-top:12px;line-height:1.6}
+.bemain .n b{color:var(--paper)}
+code{font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--amber)}
+
 /* exposure bar */
 .expo{margin:28px 0 44px}
 .expolabels{display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;
@@ -124,6 +142,7 @@ footer{border-top:1px solid var(--line);padding-top:18px;font-family:'IBM Plex M
 
 @media(max-width:700px){
   .hero{grid-template-columns:1fr;gap:14px;align-items:start}
+  .split{grid-template-columns:1fr}
   .heroside{text-align:left}
   .epoch{grid-template-columns:1fr 1fr;gap:12px}
   .shead{flex-direction:column;align-items:flex-start}
@@ -147,7 +166,7 @@ footer{border-top:1px solid var(--line);padding-top:18px;font-family:'IBM Plex M
 /* ============================================================
    CONFIG — paste the published sheet's ID here
    ============================================================ */
-const SHEET_ID = '1DgWsvHJQf0a6g2lXi5U0s4jBEgd0xeSTsk-hQpq1kwo';
+const SHEET_ID = 'PASTE_SHEET_ID_HERE';
 
 const csvUrl = tab =>
   `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tab)}`;
@@ -250,7 +269,17 @@ async function main(){
     return;
   }
 
-  render(trips, positions, epochs);
+  let snaps = [];
+  try{
+    snaps = (await loadTab('Snapshots')).map(r=>({
+      t: dt(r.snapshot_time), price: f(r.current_price), be: f(r.breakeven_price),
+      posXrp: f(r.position_xrp), inv: f(r.investment_usd),
+      arb: f(r.arb_profit_usd), hold: f(r.holdings_pnl_usd),
+      net: f(r.net_profit_usd), txs: f(r.total_txs)
+    })).filter(x=>x.t).sort((a,b)=>a.t-b.t);
+  }catch(e){ snaps = []; }
+
+  render(trips, positions, epochs, snaps);
   document.getElementById('stamp').textContent =
     'read ' + new Date().toLocaleTimeString('en-US',{hour12:false});
 }
@@ -284,21 +313,46 @@ function metrics(trips, positions, epochs){
 /* ============================================================
    RENDER
    ============================================================ */
-function render(trips, positions, epochs){
+function render(trips, positions, epochs, snaps){
+  snaps = snaps || [];
+  const latest = snaps.length ? snaps[snaps.length-1] : null;
   const m = metrics(trips, positions, epochs);
   const cur = epochs.find(e=>!e.to) || epochs[epochs.length-1];
 
   const app = document.getElementById('app');
   app.innerHTML = `
-  <div class="eyebrow">Realized profit — closed round trips only</div>
+  <div class="eyebrow">${latest ? 'Net profit — trips plus unsold holdings' : 'Realized profit — closed round trips only'}</div>
   <div class="hero">
-    <div class="pnlbig">${usd(m.realized)}</div>
+    <div class="pnlbig" style="color:${latest ? (latest.net>=0?'var(--up)':'var(--down)') : 'var(--up)'}">${latest ? usd(latest.net) : usd(m.realized)}</div>
     <div class="heroside">
       <b>${trips.length}</b> closed trips<br>
       ${m.unconfirmed ? `<span class="unconf">${m.unconfirmed} unconfirmed</span><br>` : ''}
-      ${m.perDay!=null ? `<b>${usd(m.perDay)}</b> / day over ${m.span.toFixed(1)}d` : '&nbsp;'}
+      ${m.perDay!=null ? `<b>${usd(m.perDay)}</b> / day realized` : '&nbsp;'}
     </div>
   </div>
+
+  ${latest ? `<div class="split">
+    <div class="half"><div class="k">Trip profit (realized)</div>
+      <div class="v" style="color:var(--up)">${usd(latest.arb)}</div>
+      <div class="n">Banked from ${trips.length} completed round trips. Only goes up.</div></div>
+    <div class="half"><div class="k">Holdings P&amp;L (unrealized)</div>
+      <div class="v" style="color:${latest.hold>=0?'var(--up)':'var(--down)'}">${usd(latest.hold)}</div>
+      <div class="n">Mark-to-market on ${num(latest.posXrp||0)} XRP still held.</div></div>
+  </div>
+
+  <div class="bework">
+    <div class="bemain">
+      <div class="k">Breakeven ${px(latest.be)} · now ${px(latest.price)}</div>
+      <div class="betrack"><div class="bezone" style="left:0;width:${Math.max(0,Math.min(100,(Math.min(latest.price,latest.be)/latest.be)*100))}%"></div>
+        <div class="beknob" style="left:${Math.max(1,Math.min(99,(latest.price/latest.be)*100))}%"></div></div>
+      <div class="n">${latest.price>=latest.be
+        ? `Held inventory is above water by ${(((latest.price/latest.be)-1)*100).toFixed(2)}%.`
+        : `Held inventory needs a <b>${(((latest.be/latest.price)-1)*100).toFixed(2)}%</b> move up to break even.`}</div>
+    </div>
+  </div>` : `<div class="note" style="margin-bottom:44px">
+    <b>No snapshot data yet.</b> Add a <code>Snapshots</code> tab to the sheet to see net profit,
+    holdings P&amp;L, and breakeven — the numbers that show whether banked trip profit is
+    actually outrunning the unsold inventory.</div>`}
 
   <div class="expo">
     <div class="expolabels">
@@ -320,6 +374,12 @@ function render(trips, positions, epochs){
     <div class="chartbox"><canvas id="pnlChart"></canvas></div>
     <div class="sub" style="margin-top:10px" id="pnlNote"></div>
   </section>
+
+  ${snaps.length>1 ? `<section>
+    <div class="shead"><h2>Net vs. realized over time</h2><div class="sub">From ${snaps.length} snapshots</div></div>
+    <div class="chartbox"><canvas id="snapChart"></canvas></div>
+    <div class="sub" style="margin-top:10px">Green climbs mechanically — it's banked trip profit. Blue is what the account is actually worth. When they diverge, the bot is buying inventory faster than it's selling it.</div>
+  </section>` : ''}
 
   <section>
     <div class="shead"><h2>Trip economics</h2><div class="sub">Closed trips</div></div>
@@ -379,13 +439,14 @@ function render(trips, positions, epochs){
     Realized figures exclude open positions. Past fill frequency reflects past volatility, not future.
   </footer>`;
 
-  drawExposure(m);
+  drawExposure(m, latest);
   drawPnl(trips,'cum');
   drawHist(trips);
   drawLadder(trips, positions, cur);
   drawEpochs(trips, positions, epochs);
   drawPositions(positions);
   drawTrips(trips, 25);
+  if(snaps.length>1) drawSnap(snaps);
 
   document.getElementById('pnltabs').addEventListener('click',e=>{
     const b=e.target.closest('.tab'); if(!b) return;
@@ -402,7 +463,7 @@ function render(trips, positions, epochs){
 }
 
 /* ---------- exposure ---------- */
-function drawExposure(m){
+function drawExposure(m, latest){
   const total = m.realized + m.cost;
   const pctRealized = total>0 ? (m.realized/total)*100 : 0;
   document.getElementById('expofill').style.width = Math.max(0.5,pctRealized)+'%';
@@ -410,6 +471,7 @@ function drawExposure(m){
     `${usd(m.cost)} is currently sitting in ${m.cost>0?'unsold':'no'} positions. ` +
     `If every open position closes at its target, that adds ${usd(m.unrealizedTarget)} — ` +
     `but they only close if price comes back up to reach them.` +
+    (latest && latest.hold<0 ? `<br>Webot marks those holdings at ${usd(latest.hold)} right now, which is the gap between banked profit and net.` : '') +
     (m.unconfirmed ? `<br><span class="unconf">${m.unconfirmed} trip${m.unconfirmed>1?'s are':' is'} marked unconfirmed and included in the totals above.</span>` : '');
 }
 
@@ -473,6 +535,37 @@ function drawPnl(trips, view){
     const avg = keys.length ? keys.reduce((s,k)=>s+byDay[k],0)/keys.length : 0;
     note.textContent = `${keys.length} active days · ${usd(avg)} average`;
   }
+}
+
+/* ---------- snapshot trend ---------- */
+function drawSnap(snaps){
+  charts.snap?.destroy();
+  charts.snap = new Chart(document.getElementById('snapChart'),{
+    type:'line',
+    data:{labels:snaps.map(s=>s.t), datasets:[
+      {label:'Trip profit', data:snaps.map(s=>s.arb), borderColor:'#3FB68B',
+       borderWidth:1.6, pointRadius:0, tension:.15, fill:false},
+      {label:'Net profit', data:snaps.map(s=>s.net), borderColor:'#5B8DEF',
+       borderWidth:2, pointRadius:0, tension:.15, fill:false},
+      {label:'Holdings P&L', data:snaps.map(s=>s.hold), borderColor:'#E5643E',
+       borderWidth:1.2, pointRadius:0, tension:.15, borderDash:[3,3], fill:false}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{position:'top',align:'end',labels:{boxWidth:8,boxHeight:8,usePointStyle:true,
+          pointStyle:'rect',padding:16,font:{size:11}}},
+        tooltip:{backgroundColor:'#161B22',borderColor:'#232B36',borderWidth:1,
+          titleColor:'#E8EAED',bodyColor:'#E8EAED',padding:10,
+          callbacks:{title:it=>fmtDate(snaps[it[0].dataIndex].t),
+                     label:it=>it.dataset.label+'  '+usd(it.parsed.y)}}},
+      scales:{
+        x:{grid:{display:false},ticks:{maxTicksLimit:7,maxRotation:0,
+           callback:(v,i)=>snaps[i]?snaps[i].t.toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}},
+        y:{position:'right',grid:{color:'#232B36',drawTicks:false},border:{display:false},
+           ticks:{callback:v=>'$'+v.toFixed(0)}}}
+    }
+  });
 }
 
 /* ---------- profit histogram ---------- */
