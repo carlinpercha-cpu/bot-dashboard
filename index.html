@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grid Bot — Performance Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+:root{
+  --ink:#0E1116; --slate:#161B22; --line:#232B36; --mute:#7C8794;
+  --paper:#E8EAED; --up:#3FB68B; --down:#E5643E; --wire:#5B8DEF;
+  --amber:#D9A441; --violet:#9B8DEF;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--ink);color:var(--paper);font-family:'Archivo',system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;padding:0 0 80px}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+.mono{font-family:'IBM Plex Mono',monospace}
+
+header{border-bottom:1px solid var(--line);padding:22px 0;margin-bottom:36px}
+.masthead{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.brand{font-size:15px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
+.brand span{color:var(--mute);font-weight:500}
+.stamp{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mute);
+  letter-spacing:.06em;display:flex;align-items:center;gap:8px}
+.pulse{width:6px;height:6px;border-radius:50%;background:var(--up);animation:blip 2.4s ease-in-out infinite}
+@keyframes blip{0%,100%{opacity:1}50%{opacity:.25}}
+@media(prefers-reduced-motion:reduce){.pulse{animation:none}}
+
+/* hero */
+.eyebrow{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mute);
+  letter-spacing:.14em;text-transform:uppercase;margin-bottom:12px}
+.hero{display:grid;grid-template-columns:1fr auto;gap:32px;align-items:end;margin-bottom:10px}
+.pnlbig{font-family:'IBM Plex Mono',monospace;font-size:clamp(44px,8vw,80px);
+  font-weight:600;line-height:.92;letter-spacing:-.03em;font-variant-numeric:tabular-nums;color:var(--up)}
+.heroside{font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--mute);
+  text-align:right;line-height:1.8}
+.heroside b{color:var(--paper);font-weight:600}
+
+/* exposure bar */
+.expo{margin:28px 0 44px}
+.expolabels{display:flex;justify-content:space-between;font-family:'IBM Plex Mono',monospace;
+  font-size:11px;color:var(--mute);margin-bottom:8px;letter-spacing:.05em}
+.track{height:3px;background:var(--line);position:relative;border-radius:2px;overflow:hidden}
+.fillbar{position:absolute;left:0;top:0;bottom:0;background:var(--amber);border-radius:2px}
+.expocap{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mute);
+  margin-top:10px;letter-spacing:.04em;line-height:1.7}
+
+section{margin-bottom:52px}
+.shead{display:flex;align-items:baseline;justify-content:space-between;gap:16px;
+  border-bottom:1px solid var(--line);padding-bottom:10px;margin-bottom:20px;flex-wrap:wrap}
+h2{font-size:13px;font-weight:600;letter-spacing:.14em;text-transform:uppercase}
+.sub{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mute);letter-spacing:.04em}
+
+.tabs{display:flex;gap:2px;background:var(--slate);padding:3px;border-radius:6px}
+.tab{font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:500;letter-spacing:.08em;
+  color:var(--mute);background:none;border:0;cursor:pointer;padding:6px 13px;border-radius:4px;
+  transition:background .15s,color .15s}
+.tab:hover{color:var(--paper)}
+.tab[aria-selected="true"]{background:var(--line);color:var(--paper)}
+.tab:focus-visible{outline:2px solid var(--wire);outline-offset:2px}
+
+.chartbox{position:relative;height:300px}
+.histbox{position:relative;height:200px}
+
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:1px;background:var(--line)}
+.stat{background:var(--ink);padding:18px 18px 20px}
+.stat .k{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--mute);
+  letter-spacing:.12em;text-transform:uppercase;margin-bottom:9px}
+.stat .v{font-family:'IBM Plex Mono',monospace;font-size:21px;font-weight:600;font-variant-numeric:tabular-nums}
+.stat .n{font-size:11px;color:var(--mute);margin-top:5px;line-height:1.5}
+
+/* level ladder */
+.ladder{display:flex;flex-direction:column;gap:1px;background:var(--line)}
+.rung{background:var(--ink);display:grid;grid-template-columns:76px 1fr 128px;
+  align-items:center;gap:14px;padding:9px 14px}
+.rungp{font-family:'IBM Plex Mono',monospace;font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+.rungbar{height:20px;background:var(--slate);position:relative;border-radius:2px;overflow:hidden}
+.rungfill{position:absolute;left:0;top:0;bottom:0;background:var(--up);opacity:.5}
+.rungmeta{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mute);text-align:right}
+
+/* epoch cards */
+.epochs{display:grid;gap:1px;background:var(--line)}
+.epoch{background:var(--ink);padding:18px 20px;display:grid;
+  grid-template-columns:1fr repeat(4,minmax(76px,auto));gap:18px;align-items:center}
+.epoch.cur{border-left:2px solid var(--wire)}
+.epochname{font-size:13px;font-weight:600}
+.epochband{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mute);margin-top:4px}
+.epochm{text-align:right}
+.epochm .k{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--mute);
+  letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px}
+.epochm .v{font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+
+/* table */
+.tblwrap{overflow-x:auto}
+table.tt{width:100%;border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:11.5px;min-width:720px}
+table.tt th{color:var(--mute);font-weight:500;letter-spacing:.08em;text-transform:uppercase;
+  font-size:9.5px;padding:0 10px 10px;text-align:right;border-bottom:1px solid var(--line)}
+table.tt th:first-child,table.tt td:first-child{text-align:left}
+table.tt td{padding:9px 10px;text-align:right;border-bottom:1px solid var(--slate);font-variant-numeric:tabular-nums}
+table.tt tr:hover td{background:var(--slate)}
+.unconf{color:var(--amber)}
+.pill{font-size:9px;letter-spacing:.08em;border:1px solid var(--amber);color:var(--amber);
+  padding:1px 5px;border-radius:3px;margin-left:6px}
+
+.note{background:var(--slate);border-left:2px solid var(--wire);padding:16px 20px;
+  font-size:12.5px;color:var(--mute);line-height:1.7}
+.note b{color:var(--paper);font-weight:600}
+
+.loading,.err{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--mute);
+  padding:26px 0;letter-spacing:.04em}
+.err{color:var(--down)}
+.setup{background:var(--slate);padding:22px 24px;border-left:2px solid var(--amber);
+  font-size:13px;line-height:1.8;color:var(--mute)}
+.setup b{color:var(--paper)}
+.setup code{font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--amber)}
+
+footer{border-top:1px solid var(--line);padding-top:18px;font-family:'IBM Plex Mono',monospace;
+  font-size:11px;color:var(--mute);line-height:1.8;letter-spacing:.03em}
+
+@media(max-width:700px){
+  .hero{grid-template-columns:1fr;gap:14px;align-items:start}
+  .heroside{text-align:left}
+  .epoch{grid-template-columns:1fr 1fr;gap:12px}
+  .shead{flex-direction:column;align-items:flex-start}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap masthead">
+    <div class="brand">GRID BOT <span>/ PERFORMANCE LEDGER</span></div>
+    <div class="stamp"><span class="pulse"></span><span id="stamp">loading</span></div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div id="app"><div class="loading">Reading ledger…</div></div>
+</div>
+
+<script>
+/* ============================================================
+   CONFIG — paste the published sheet's ID here
+   ============================================================ */
+const SHEET_ID = '1DgWsvHJQf0a6g2lXi5U0s4jBEgd0xeSTsk-hQpq1kwo';
+
+const csvUrl = tab =>
+  `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(tab)}`;
+
+/* ---------- formatting ---------- */
+const usd  = n => (n<0?'−$':'$') + Math.abs(n).toFixed(2);
+const usd4 = n => '$' + n.toFixed(4);
+const px   = n => n.toFixed(4);
+const pctS = n => (n>=0?'+':'') + n.toFixed(2) + '%';
+const num  = n => n.toLocaleString('en-US',{maximumFractionDigits:1});
+
+function fmtDate(d){
+  return d.toLocaleDateString('en-US',{month:'short',day:'numeric'}) + ' ' +
+         d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false});
+}
+function fmtDur(ms){
+  const h = ms/3600000;
+  if(h < 1)  return Math.round(h*60) + 'm';
+  if(h < 48) return h.toFixed(1) + 'h';
+  return (h/24).toFixed(1) + 'd';
+}
+
+/* ---------- CSV loading ---------- */
+async function loadTab(tab){
+  const r = await fetch(csvUrl(tab));
+  if(!r.ok) throw new Error(`"${tab}" tab returned ${r.status}`);
+  const text = await r.text();
+  if(text.trim().startsWith('<')) throw new Error(`"${tab}" isn't published to the web`);
+  const out = Papa.parse(text, {header:true, skipEmptyLines:true, dynamicTyping:false});
+  return out.data.map(row=>{
+    const o = {};
+    for(const k in row){ o[k.trim().toLowerCase().replace(/\s+/g,'_')] = (row[k]??'').toString().trim(); }
+    return o;
+  }).filter(o => Object.values(o).some(v=>v!==''));
+}
+
+const f  = v => { const n = parseFloat(v); return isNaN(n) ? null : n; };
+const dt = v => { const d = new Date(v); return isNaN(d) ? null : d; };
+const yes= v => /^(y|yes|true|1)$/i.test((v||'').trim());
+
+/* ============================================================
+   MAIN
+   ============================================================ */
+let charts = {};
+
+async function main(){
+  const app = document.getElementById('app');
+
+  if(SHEET_ID === 'PASTE_SHEET_ID_HERE'){
+    app.innerHTML = `<div class="setup">
+      <b>Not connected yet.</b><br>
+      Open <code>index.html</code>, find <code>const SHEET_ID</code> near the top of the
+      script block, and paste in the published sheet's ID — the long string in its URL
+      between <code>/d/</code> and <code>/edit</code>.<br><br>
+      The sheet needs three tabs named <code>Trips</code>, <code>Positions</code>, and
+      <code>Epochs</code>, and it must be published via
+      <b>File → Share → Publish to web</b>.</div>`;
+    document.getElementById('stamp').textContent = 'not connected';
+    return;
+  }
+
+  let rawTrips, rawPos, rawEp;
+  try{
+    [rawTrips, rawPos, rawEp] = await Promise.all([
+      loadTab('Trips'), loadTab('Positions'), loadTab('Epochs')
+    ]);
+  }catch(e){
+    app.innerHTML = `<div class="err">Couldn't read the sheet — ${e.message}</div>
+      <div class="setup" style="margin-top:20px">Check that the sheet is published to the web
+      and that the tabs are named exactly <code>Trips</code>, <code>Positions</code>,
+      <code>Epochs</code>.</div>`;
+    document.getElementById('stamp').textContent = 'sheet unavailable';
+    return;
+  }
+
+  /* ---------- parse ---------- */
+  const epochs = rawEp.map(r=>({
+    id: r.epoch_id, label: r.label || r.epoch_id,
+    from: dt(r.active_from), to: r.active_to ? dt(r.active_to) : null,
+    low: f(r.low), high: f(r.high),
+    count: f(r.grid_count), qty: f(r.qty_per_grid)
+  })).filter(e=>e.id).sort((a,b)=>(a.from||0)-(b.from||0));
+
+  const trips = rawTrips.map(r=>({
+    id: r.trip_id, buyT: dt(r.buy_time), sellT: dt(r.sell_time),
+    buyP: f(r.buy_price), sellP: f(r.sell_price), qty: f(r.qty),
+    profit: f(r.profit_usd) ?? 0, fee: f(r.fee_usd) ?? 0,
+    epoch: r.epoch_id, conf: yes(r.confirmed)
+  })).filter(t=>t.sellT).sort((a,b)=>a.sellT-b.sellT);
+
+  const positions = rawPos.map(r=>({
+    buyT: dt(r.buy_time), buyP: f(r.buy_price), target: f(r.sell_target),
+    qty: f(r.qty), epoch: r.epoch_id, conf: yes(r.confirmed)
+  })).filter(p=>p.buyP);
+
+  if(!trips.length && !positions.length){
+    app.innerHTML = `<div class="setup"><b>Sheet is readable but empty.</b><br>
+      Add rows to the <code>Trips</code> and <code>Positions</code> tabs.</div>`;
+    document.getElementById('stamp').textContent = 'no data';
+    return;
+  }
+
+  render(trips, positions, epochs);
+  document.getElementById('stamp').textContent =
+    'read ' + new Date().toLocaleTimeString('en-US',{hour12:false});
+}
+
+/* ============================================================
+   DERIVED METRICS
+   ============================================================ */
+function metrics(trips, positions, epochs){
+  const realized   = trips.reduce((s,t)=>s+t.profit,0);
+  const fees       = trips.reduce((s,t)=>s+t.fee,0);
+  const confirmed  = trips.filter(t=>t.conf);
+  const realizedC  = confirmed.reduce((s,t)=>s+t.profit,0);
+
+  const cost = positions.reduce((s,p)=>s + p.buyP*(p.qty||0), 0);
+  const unrealizedTarget = positions.reduce((s,p)=>s + (p.target-p.buyP)*(p.qty||0), 0);
+
+  const durs = trips.filter(t=>t.buyT).map(t=>t.sellT-t.buyT);
+  const medDur = durs.length ? durs.slice().sort((a,b)=>a-b)[Math.floor(durs.length/2)] : null;
+
+  let perDay = null, span = null;
+  if(trips.length > 1){
+    span = (trips[trips.length-1].sellT - trips[0].sellT)/86400000;
+    if(span > 0.25) perDay = realized/span;
+  }
+
+  return {realized, realizedC, fees, confirmed:confirmed.length,
+          unconfirmed:trips.length-confirmed.length,
+          cost, unrealizedTarget, medDur, perDay, span};
+}
+
+/* ============================================================
+   RENDER
+   ============================================================ */
+function render(trips, positions, epochs){
+  const m = metrics(trips, positions, epochs);
+  const cur = epochs.find(e=>!e.to) || epochs[epochs.length-1];
+
+  const app = document.getElementById('app');
+  app.innerHTML = `
+  <div class="eyebrow">Realized profit — closed round trips only</div>
+  <div class="hero">
+    <div class="pnlbig">${usd(m.realized)}</div>
+    <div class="heroside">
+      <b>${trips.length}</b> closed trips<br>
+      ${m.unconfirmed ? `<span class="unconf">${m.unconfirmed} unconfirmed</span><br>` : ''}
+      ${m.perDay!=null ? `<b>${usd(m.perDay)}</b> / day over ${m.span.toFixed(1)}d` : '&nbsp;'}
+    </div>
+  </div>
+
+  <div class="expo">
+    <div class="expolabels">
+      <span>REALIZED ${usd(m.realized)}</span>
+      <span>CAPITAL DEPLOYED IN OPEN POSITIONS</span>
+      <span>${usd(m.cost)}</span>
+    </div>
+    <div class="track"><div class="fillbar" id="expofill"></div></div>
+    <div class="expocap" id="expocap"></div>
+  </div>
+
+  <section>
+    <div class="shead"><h2>Cumulative realized P&amp;L</h2>
+      <div class="tabs" role="tablist" id="pnltabs">
+        <button class="tab" role="tab" data-v="cum" aria-selected="true">CUMULATIVE</button>
+        <button class="tab" role="tab" data-v="daily" aria-selected="false">PER DAY</button>
+      </div>
+    </div>
+    <div class="chartbox"><canvas id="pnlChart"></canvas></div>
+    <div class="sub" style="margin-top:10px" id="pnlNote"></div>
+  </section>
+
+  <section>
+    <div class="shead"><h2>Trip economics</h2><div class="sub">Closed trips</div></div>
+    <div class="stats">
+      <div class="stat"><div class="k">Median hold</div><div class="v">${m.medDur!=null?fmtDur(m.medDur):'—'}</div>
+        <div class="n">Buy to sell</div></div>
+      <div class="stat"><div class="k">Avg per trip</div><div class="v">${usd(m.realized/(trips.length||1))}</div>
+        <div class="n">Across ${trips.length} trips</div></div>
+      <div class="stat"><div class="k">Fees paid</div><div class="v">${usd(m.fees)}</div>
+        <div class="n">${m.realized?((m.fees/(m.realized+m.fees))*100).toFixed(0):'0'}% of gross</div></div>
+      <div class="stat"><div class="k">Open positions</div><div class="v">${positions.length}</div>
+        <div class="n">${usd(m.cost)} deployed</div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="shead"><h2>Profit distribution</h2><div class="sub">Per closed trip</div></div>
+    <div class="histbox"><canvas id="histChart"></canvas></div>
+    <div class="sub" style="margin-top:10px">Grid bots produce a tight cluster by design — each trip is one interval wide. Outliers are usually seeded initial buys, where the entry price came from a parameter change rather than a grid fill.</div>
+  </section>
+
+  <section>
+    <div class="shead"><h2>Level activity</h2><div class="sub">Current band ${cur?`${px(cur.low)}–${px(cur.high)}`:''}</div></div>
+    <div class="ladder" id="ladder"></div>
+    <div class="sub" style="margin-top:12px">Fill counts per buy level. Levels that never fill are band width that isn't working; levels that fill constantly are where the volatility actually lives.</div>
+  </section>
+
+  <section>
+    <div class="shead"><h2>Parameter epochs</h2><div class="sub">P&amp;L against the regime it earned in</div></div>
+    <div class="epochs" id="epochlist"></div>
+    <div class="note" style="margin-top:20px">
+      <b>Reading this honestly:</b> an epoch that earned more didn't necessarily use better
+      settings. Grid bots earn from oscillation, so a band that happened to sit inside a choppy
+      stretch will outperform an identical band in a trending one. The trips-per-day column is
+      the closest thing here to a fair comparison, and even that reflects how volatile the market
+      was as much as how the band was configured.
+    </div>
+  </section>
+
+  <section>
+    <div class="shead"><h2>Open positions</h2><div class="sub">Bought, not yet sold</div></div>
+    <div class="tblwrap"><table class="tt" id="postbl"></table></div>
+  </section>
+
+  <section>
+    <div class="shead"><h2>Trip history</h2>
+      <div class="tabs" role="tablist" id="triptabs">
+        <button class="tab" role="tab" data-n="25" aria-selected="true">LAST 25</button>
+        <button class="tab" role="tab" data-n="all" aria-selected="false">ALL</button>
+      </div>
+    </div>
+    <div class="tblwrap"><table class="tt" id="triptbl"></table></div>
+  </section>
+
+  <footer>
+    Data entered manually from Webot · this ledger reports what was recorded, it does not infer fills<br>
+    Realized figures exclude open positions. Past fill frequency reflects past volatility, not future.
+  </footer>`;
+
+  drawExposure(m);
+  drawPnl(trips,'cum');
+  drawHist(trips);
+  drawLadder(trips, positions, cur);
+  drawEpochs(trips, positions, epochs);
+  drawPositions(positions);
+  drawTrips(trips, 25);
+
+  document.getElementById('pnltabs').addEventListener('click',e=>{
+    const b=e.target.closest('.tab'); if(!b) return;
+    [...e.currentTarget.children].forEach(x=>x.setAttribute('aria-selected','false'));
+    b.setAttribute('aria-selected','true');
+    drawPnl(trips,b.dataset.v);
+  });
+  document.getElementById('triptabs').addEventListener('click',e=>{
+    const b=e.target.closest('.tab'); if(!b) return;
+    [...e.currentTarget.children].forEach(x=>x.setAttribute('aria-selected','false'));
+    b.setAttribute('aria-selected','true');
+    drawTrips(trips, b.dataset.n==='all'?Infinity:25);
+  });
+}
+
+/* ---------- exposure ---------- */
+function drawExposure(m){
+  const total = m.realized + m.cost;
+  const pctRealized = total>0 ? (m.realized/total)*100 : 0;
+  document.getElementById('expofill').style.width = Math.max(0.5,pctRealized)+'%';
+  document.getElementById('expocap').innerHTML =
+    `${usd(m.cost)} is currently sitting in ${m.cost>0?'unsold':'no'} positions. ` +
+    `If every open position closes at its target, that adds ${usd(m.unrealizedTarget)} — ` +
+    `but they only close if price comes back up to reach them.` +
+    (m.unconfirmed ? `<br><span class="unconf">${m.unconfirmed} trip${m.unconfirmed>1?'s are':' is'} marked unconfirmed and included in the totals above.</span>` : '');
+}
+
+/* ---------- P&L chart ---------- */
+function drawPnl(trips, view){
+  charts.pnl?.destroy();
+  const note = document.getElementById('pnlNote');
+
+  if(view==='cum'){
+    let run = 0;
+    const pts = trips.map(t=>{ run += t.profit; return {x:t.sellT, y:run}; });
+    charts.pnl = new Chart(document.getElementById('pnlChart'),{
+      type:'line',
+      data:{labels:pts.map(p=>p.x), datasets:[{
+        data:pts.map(p=>p.y), borderColor:'#3FB68B', borderWidth:1.8,
+        pointRadius:0, tension:.1, stepped:false, fill:true,
+        backgroundColor:(c)=>{
+          const {ctx,chartArea}=c.chart; if(!chartArea) return 'transparent';
+          const g=ctx.createLinearGradient(0,chartArea.top,0,chartArea.bottom);
+          g.addColorStop(0,'#3FB68B33'); g.addColorStop(1,'#3FB68B00'); return g;
+        }
+      }]},
+      options:{responsive:true,maintainAspectRatio:false,
+        interaction:{mode:'index',intersect:false},
+        plugins:{legend:{display:false},tooltip:{
+          backgroundColor:'#161B22',borderColor:'#232B36',borderWidth:1,
+          titleColor:'#E8EAED',bodyColor:'#E8EAED',padding:10,displayColors:false,
+          callbacks:{title:it=>fmtDate(pts[it[0].dataIndex].x),
+                     label:it=>'Cumulative  '+usd(it.parsed.y)}}},
+        scales:{
+          x:{grid:{display:false},ticks:{maxTicksLimit:7,maxRotation:0,
+             callback:(v,i)=>pts[i]?pts[i].x.toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}},
+          y:{position:'right',grid:{color:'#232B36',drawTicks:false},border:{display:false},
+             ticks:{callback:v=>'$'+v.toFixed(0)}}}
+      }
+    });
+    note.textContent = `${trips.length} trips · each step is one completed round trip`;
+  }else{
+    const byDay = {};
+    trips.forEach(t=>{
+      const k = t.sellT.toISOString().slice(0,10);
+      byDay[k] = (byDay[k]||0) + t.profit;
+    });
+    const keys = Object.keys(byDay).sort();
+    charts.pnl = new Chart(document.getElementById('pnlChart'),{
+      type:'bar',
+      data:{labels:keys, datasets:[{data:keys.map(k=>byDay[k]),
+        backgroundColor:keys.map(k=>byDay[k]>=0?'#3FB68B88':'#E5643E88'), borderWidth:0}]},
+      options:{responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{display:false},tooltip:{
+          backgroundColor:'#161B22',borderColor:'#232B36',borderWidth:1,
+          titleColor:'#E8EAED',bodyColor:'#E8EAED',padding:10,displayColors:false,
+          callbacks:{label:it=>usd(it.parsed.y)}}},
+        scales:{
+          x:{grid:{display:false},ticks:{maxRotation:0,
+             callback:(v,i)=>new Date(keys[i]+'T00:00:00Z').toLocaleDateString('en-US',{month:'short',day:'numeric'})}},
+          y:{position:'right',grid:{color:'#232B36',drawTicks:false},border:{display:false},
+             ticks:{callback:v=>'$'+v.toFixed(0)}}}
+      }
+    });
+    const avg = keys.length ? keys.reduce((s,k)=>s+byDay[k],0)/keys.length : 0;
+    note.textContent = `${keys.length} active days · ${usd(avg)} average`;
+  }
+}
+
+/* ---------- profit histogram ---------- */
+function drawHist(trips){
+  charts.hist?.destroy();
+  if(!trips.length) return;
+  const vals = trips.map(t=>t.profit);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const bins = 14, w = (hi-lo)/bins || 1;
+  const counts = new Array(bins).fill(0);
+  vals.forEach(v=>{ counts[Math.min(bins-1, Math.floor((v-lo)/w))]++; });
+  charts.hist = new Chart(document.getElementById('histChart'),{
+    type:'bar',
+    data:{labels:counts.map((_,i)=>(lo+i*w).toFixed(2)),
+      datasets:[{data:counts, backgroundColor:'#5B8DEF88', borderWidth:0}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{
+        backgroundColor:'#161B22',borderColor:'#232B36',borderWidth:1,
+        titleColor:'#E8EAED',bodyColor:'#E8EAED',padding:10,displayColors:false,
+        callbacks:{title:it=>'$'+it[0].label+' – $'+(parseFloat(it[0].label)+w).toFixed(2),
+                   label:it=>it.parsed.y+' trip'+(it.parsed.y===1?'':'s')}}},
+      scales:{
+        x:{grid:{display:false},ticks:{maxTicksLimit:8,maxRotation:0,callback:(v,i)=>'$'+counts.map((_,j)=>(lo+j*w).toFixed(2))[i]}},
+        y:{position:'right',grid:{color:'#232B36',drawTicks:false},border:{display:false},
+           ticks:{precision:0}}}
+    }
+  });
+}
+
+/* ---------- level ladder ---------- */
+function drawLadder(trips, positions, cur){
+  const box = document.getElementById('ladder');
+  const counts = {}, profit = {};
+  trips.forEach(t=>{
+    const k = t.buyP?.toFixed(4);
+    if(!k) return;
+    counts[k] = (counts[k]||0)+1;
+    profit[k] = (profit[k]||0)+t.profit;
+  });
+  const openAt = {};
+  positions.forEach(p=>{ const k=p.buyP?.toFixed(4); if(k) openAt[k]=(openAt[k]||0)+1; });
+
+  // levels: from the current epoch if available, else observed buy prices
+  let levels = [];
+  if(cur && cur.low!=null && cur.high!=null && cur.count>1){
+    const step = (cur.high-cur.low)/(cur.count-1);
+    for(let i=0;i<cur.count;i++) levels.push(+(cur.low+i*step).toFixed(4));
+  }
+  Object.keys(counts).forEach(k=>{ if(!levels.includes(+k)) levels.push(+k); });
+  Object.keys(openAt).forEach(k=>{ if(!levels.includes(+k)) levels.push(+k); });
+  levels.sort((a,b)=>b-a);
+
+  const maxC = Math.max(1, ...Object.values(counts));
+  box.innerHTML = levels.map(L=>{
+    const k = L.toFixed(4);
+    const c = counts[k]||0, pf = profit[k]||0, op = openAt[k]||0;
+    const inBand = cur && cur.low!=null && L>=cur.low-1e-9 && L<=cur.high+1e-9;
+    return `<div class="rung">
+      <div class="rungp" style="color:${inBand?'var(--paper)':'var(--mute)'}">${k}</div>
+      <div class="rungbar"><div class="rungfill" style="width:${(c/maxC)*100}%"></div></div>
+      <div class="rungmeta">${c?`${c} fill${c>1?'s':''} · ${usd(pf)}`:(op?`<span style="color:var(--amber)">holding</span>`:'—')}</div>
+    </div>`;
+  }).join('');
+}
+
+/* ---------- epochs ---------- */
+function drawEpochs(trips, positions, epochs){
+  const box = document.getElementById('epochlist');
+  if(!epochs.length){ box.innerHTML = '<div class="loading">No epochs recorded.</div>'; return; }
+
+  box.innerHTML = epochs.slice().reverse().map(ep=>{
+    const et = trips.filter(t=>t.epoch===ep.id);
+    const pnl = et.reduce((s,t)=>s+t.profit,0);
+    const end = ep.to || new Date();
+    const days = ep.from ? (end-ep.from)/86400000 : null;
+    const perDay = days && days>0.25 ? pnl/days : null;
+    const tripsDay = days && days>0.25 ? et.length/days : null;
+    const width = (ep.low!=null&&ep.high!=null) ? ((ep.high-ep.low)/ep.low)*100 : null;
+    return `<div class="epoch ${ep.to?'':'cur'}">
+      <div>
+        <div class="epochname">${ep.label}${ep.to?'':' <span class="sub">· active</span>'}</div>
+        <div class="epochband">${ep.low!=null?`${px(ep.low)} – ${px(ep.high)}`:''}${width!=null?` · ${width.toFixed(1)}% wide`:''}${ep.count?` · ${ep.count} levels`:''}</div>
+        <div class="epochband">${ep.from?fmtDate(ep.from):'?'} → ${ep.to?fmtDate(ep.to):'now'}</div>
+      </div>
+      <div class="epochm"><div class="k">Trips</div><div class="v">${et.length}</div></div>
+      <div class="epochm"><div class="k">P&amp;L</div><div class="v" style="color:${pnl>=0?'var(--up)':'var(--down)'}">${usd(pnl)}</div></div>
+      <div class="epochm"><div class="k">Per day</div><div class="v">${perDay!=null?usd(perDay):'—'}</div></div>
+      <div class="epochm"><div class="k">Trips/day</div><div class="v">${tripsDay!=null?tripsDay.toFixed(1):'—'}</div></div>
+    </div>`;
+  }).join('');
+}
+
+/* ---------- open positions table ---------- */
+function drawPositions(positions){
+  const t = document.getElementById('postbl');
+  if(!positions.length){
+    t.outerHTML = '<div class="loading">No open positions — everything is closed out.</div>';
+    return;
+  }
+  const now = Date.now();
+  t.innerHTML = `<thead><tr>
+      <th>Bought</th><th>Buy</th><th>Target</th><th>Qty</th><th>Held</th><th>Gain at target</th>
+    </tr></thead><tbody>` +
+    positions.slice().sort((a,b)=>(b.buyT||0)-(a.buyT||0)).map(p=>{
+      const gain = (p.target-p.buyP)*(p.qty||0);
+      return `<tr>
+        <td>${p.buyT?fmtDate(p.buyT):'—'}${p.conf?'':'<span class="pill">UNCONF</span>'}</td>
+        <td>${px(p.buyP)}</td>
+        <td style="color:var(--wire)">${px(p.target)}</td>
+        <td>${num(p.qty||0)}</td>
+        <td>${p.buyT?fmtDur(now-p.buyT):'—'}</td>
+        <td style="color:var(--up)">${usd(gain)}</td>
+      </tr>`;
+    }).join('') + '</tbody>';
+}
+
+/* ---------- trips table ---------- */
+function drawTrips(trips, n){
+  const t = document.getElementById('triptbl');
+  const rows = trips.slice().reverse().slice(0, n===Infinity?trips.length:n);
+  t.innerHTML = `<thead><tr>
+      <th>#</th><th>Bought</th><th>Sold</th><th>Buy</th><th>Sell</th><th>Held</th><th>Fee</th><th>Profit</th>
+    </tr></thead><tbody>` +
+    rows.map(r=>`<tr>
+      <td>${r.id||''}${r.conf?'':'<span class="pill">UNCONF</span>'}</td>
+      <td>${r.buyT?fmtDate(r.buyT):'—'}</td>
+      <td>${fmtDate(r.sellT)}</td>
+      <td>${r.buyP!=null?px(r.buyP):'—'}</td>
+      <td>${r.sellP!=null?px(r.sellP):'—'}</td>
+      <td>${r.buyT?fmtDur(r.sellT-r.buyT):'—'}</td>
+      <td style="color:var(--mute)">${r.fee?usd(r.fee):'—'}</td>
+      <td style="color:${r.profit>=0?'var(--up)':'var(--down)'}">${usd(r.profit)}</td>
+    </tr>`).join('') + '</tbody>';
+}
+
+main();
+setInterval(main, 300000);
+</script>
+</body>
+</html>
