@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Grid Bot — Performance Ledger</title>
+<title>Tyler's Grid Bot — Performance Ledger</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -163,7 +163,7 @@ footer{border-top:1px solid var(--line);padding-top:18px;font-family:'IBM Plex M
 
 <header>
   <div class="wrap masthead">
-    <div class="brand">GRID BOT <span>/ PERFORMANCE LEDGER</span></div>
+    <div class="brand">TYLER'S GRID BOT <span>/ PERFORMANCE LEDGER</span></div>
     <div class="stamp"><span class="pulse"></span><span id="stamp">loading</span></div>
   </div>
 </header>
@@ -228,18 +228,21 @@ const GRANS = {
   '6h' :{g:300,   span:6,   mode:'grid',  label:'5-minute candles'},
   '12h':{g:900,   span:12,  mode:'grid',  label:'15-minute candles'},
   '24h':{g:1800,  span:24,  mode:'grid',  label:'30-minute candles'},
-  'Full':{g:21600,span:null, mode:'grid', label:'6-hour candles'},
+  'Full':{g:3600, span:null, mode:'grid', label:'hourly candles'},
   'P24h':{g:1800, span:24,  mode:'price', label:'30-minute candles'},
   'P1W':{g:3600,  span:168, mode:'price', label:'hourly candles'},
-  'P1M':{g:21600, span:720, mode:'price', label:'6-hour candles'}
+  'P1M':{g:86400, span:720, mode:'price', label:'daily candles'}
 };
 
 let gridState = {range:'Full', mode:'grid', candles:null, gran:null, zoom:null, drag:null};
 let GD = {trips:[], positions:[], epochs:[], openBuys:[]};
 
 async function fetchCandles(gran){
-  const raw = await (await fetch(`${CB_API}/products/${CB_PAIR}/candles?granularity=${gran}`)).json();
-  if(!Array.isArray(raw)) throw new Error('candle fetch failed');
+  const res = await fetch(`${CB_API}/products/${CB_PAIR}/candles?granularity=${gran}`);
+  if(!res.ok) throw new Error(`Coinbase returned ${res.status} for ${gran}s candles`);
+  const raw = await res.json();
+  if(!Array.isArray(raw)) throw new Error(raw?.message || `unexpected response for ${gran}s candles`);
+  if(!raw.length) throw new Error(`no candles returned for ${gran}s`);
   // [time, low, high, open, close, volume]
   return raw.map(r=>({t:r[0]*1000, l:r[1], h:r[2], o:r[3], c:r[4], v:r[5]}))
             .sort((a,b)=>a.t-b.t);
@@ -254,10 +257,11 @@ function gridLevels(ep){
 async function loadGridChart(range){
   const host = document.getElementById('gridChart');
   if(!host) return;
+  const changed = range && range !== gridState.range;
   gridState.range = range || gridState.range;
   const cfg = GRANS[gridState.range];
   gridState.mode = cfg.mode;
-  gridState.zoom = null;
+  if(changed || gridState.zoom) gridState.zoom = null;
 
   host.innerHTML = `<div class="loading" style="padding:60px 0;text-align:center">Loading candles…</div>`;
   try{
@@ -267,6 +271,17 @@ async function loadGridChart(range){
     }
     drawGrid();
   }catch(e){
+    // fall back to hourly, which Coinbase always accepts
+    if(cfg.g !== 3600){
+      try{
+        gridState.candles = await fetchCandles(3600);
+        gridState.gran = 3600;
+        drawGrid();
+        const n = document.getElementById('gridNote');
+        if(n) n.innerHTML = `Showing hourly candles — ${cfg.label} unavailable from Coinbase.`;
+        return;
+      }catch(_){}
+    }
     host.innerHTML = `<div class="err">Candles unavailable — ${e.message}</div>`;
   }
 }
@@ -301,10 +316,16 @@ function drawGrid(){
   const curEp = GD.epochs.find(e=>!e.to) || GD.epochs[GD.epochs.length-1];
 
   if(gridState.mode==='grid'){
-    // include grid levels of any epoch overlapping the window
+    // include grid levels, but only those within reach of actual price action —
+    // otherwise a stale wide band squashes the candles into a sliver
+    const range = (hi-lo) || 0.01;
+    const guard = range * 1.4;
     GD.epochs.forEach(ep=>{
       const a = ep.from?ep.from.getTime():-Infinity, b = ep.to?ep.to.getTime():Infinity;
-      if(b>=t0 && a<=t1){ gridLevels(ep).forEach(L=>{ lo=Math.min(lo,L); hi=Math.max(hi,L); }); }
+      if(b<t0 || a>t1) return;
+      gridLevels(ep).forEach(L=>{
+        if(L > lo-guard && L < hi+guard){ lo=Math.min(lo,L); hi=Math.max(hi,L); }
+      });
     });
   }
   const pad = (hi-lo)*0.10 || 0.005;
