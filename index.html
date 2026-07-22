@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Tyler's Grid Bot — Performance Ledger</title>
+<title>Grid Bot — Performance Ledger</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -123,9 +123,23 @@ h2{font-size:13px;font-weight:600;letter-spacing:.14em;text-transform:uppercase}
   letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px}
 .epochm .v{font-family:'IBM Plex Mono',monospace;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
 
+/* position log */
+.logstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
+  background:var(--line);margin-bottom:20px}
+.ls{background:var(--ink);padding:15px 16px 17px}
+.ls .k{font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:var(--mute);
+  letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px}
+.ls .v{font-family:'IBM Plex Mono',monospace;font-size:19px;font-weight:600;font-variant-numeric:tabular-nums}
+.ls .n{font-size:10.5px;color:var(--mute);margin-top:5px}
+.st{font-family:'IBM Plex Mono',monospace;font-size:8.5px;letter-spacing:.09em;
+  padding:2px 6px;border-radius:3px;font-weight:600}
+.stopen{background:rgba(217,164,65,.16);color:var(--amber);border:1px solid rgba(217,164,65,.35)}
+.stclosed{background:rgba(63,182,139,.14);color:var(--up);border:1px solid rgba(63,182,139,.3)}
+.stcanc{background:rgba(124,135,148,.14);color:var(--mute);border:1px solid rgba(124,135,148,.3)}
+
 /* table */
 .tblwrap{overflow-x:auto}
-table.tt{width:100%;border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:11.5px;min-width:720px}
+table.tt{width:100%;border-collapse:collapse;font-family:'IBM Plex Mono',monospace;font-size:11.5px;min-width:900px}
 table.tt th{color:var(--mute);font-weight:500;letter-spacing:.08em;text-transform:uppercase;
   font-size:9.5px;padding:0 10px 10px;text-align:right;border-bottom:1px solid var(--line)}
 table.tt th:first-child,table.tt td:first-child{text-align:left}
@@ -163,7 +177,7 @@ footer{border-top:1px solid var(--line);padding-top:18px;font-family:'IBM Plex M
 
 <header>
   <div class="wrap masthead">
-    <div class="brand">TYLER'S GRID BOT <span>/ PERFORMANCE LEDGER</span></div>
+    <div class="brand">GRID BOT <span>/ PERFORMANCE LEDGER</span></div>
     <div class="stamp"><span class="pulse"></span><span id="stamp">loading</span></div>
   </div>
 </header>
@@ -537,16 +551,16 @@ async function main(){
     return;
   }
 
-  let rawTrips, rawPos, rawEp;
+  let rawPos, rawEp;
   try{
-    [rawTrips, rawPos, rawEp] = await Promise.all([
-      loadTab('Trips'), loadTab('Positions'), loadTab('Epochs')
+    [rawPos, rawEp] = await Promise.all([
+      loadTab('Positions'), loadTab('Epochs')
     ]);
   }catch(e){
     app.innerHTML = `<div class="err">Couldn't read the sheet — ${e.message}</div>
       <div class="setup" style="margin-top:20px">Check that the sheet is published to the web
-      and that the tabs are named exactly <code>Trips</code>, <code>Positions</code>,
-      <code>Epochs</code>.</div>`;
+      and that the tabs are named exactly <code>Positions</code>, <code>Epochs</code>,
+      and (optionally) <code>Snapshots</code>.</div>`;
     document.getElementById('stamp').textContent = 'sheet unavailable';
     return;
   }
@@ -559,21 +573,29 @@ async function main(){
     count: f(r.grid_count), qty: f(r.qty_per_grid)
   })).filter(e=>e.id).sort((a,b)=>(a.from||0)-(b.from||0));
 
-  const trips = rawTrips.map(r=>({
-    id: r.trip_id, buyT: dt(r.buy_time), sellT: dt(r.sell_time),
-    buyP: f(r.buy_price), sellP: f(r.sell_price), qty: f(r.qty),
-    profit: f(r.profit_usd) ?? 0, fee: f(r.fee_usd) ?? 0,
-    epoch: r.epoch_id, conf: yes(r.confirmed)
-  })).filter(t=>t.sellT).sort((a,b)=>a.sellT-b.sellT);
+  const rows = rawPos.map(r=>{
+    const st = (r.status||'').toLowerCase().trim();
+    const sellT = dt(r.sell_time), sellP = f(r.sell_price);
+    // status is authoritative; infer it only when the column is blank
+    const status = st || (sellT && sellP ? 'closed' : 'open');
+    return {
+      id: r.trip_id || r.id || '',
+      buyT: dt(r.buy_time), buyP: f(r.buy_price),
+      sellT, sellP, target: f(r.sell_target),
+      qty: f(r.qty) ?? 0,
+      profit: f(r.profit_usd) ?? 0, fee: f(r.fee_usd) ?? 0,
+      epoch: r.epoch_id, conf: yes(r.confirmed), status,
+      note: r.note || ''
+    };
+  }).filter(r=>r.buyP!=null);
 
-  const positions = rawPos.map(r=>({
-    buyT: dt(r.buy_time), buyP: f(r.buy_price), target: f(r.sell_target),
-    qty: f(r.qty), epoch: r.epoch_id, conf: yes(r.confirmed)
-  })).filter(p=>p.buyP);
+  const trips     = rows.filter(r=>r.status==='closed' && r.sellT).sort((a,b)=>a.sellT-b.sellT);
+  const positions = rows.filter(r=>r.status==='open');
+  const cancelled = rows.filter(r=>r.status==='cancelled');
 
-  if(!trips.length && !positions.length){
+  if(!rows.length){
     app.innerHTML = `<div class="setup"><b>Sheet is readable but empty.</b><br>
-      Add rows to the <code>Trips</code> and <code>Positions</code> tabs.</div>`;
+      Add rows to the <code>Positions</code> tab.</div>`;
     document.getElementById('stamp').textContent = 'no data';
     return;
   }
@@ -588,7 +610,7 @@ async function main(){
     })).filter(x=>x.t).sort((a,b)=>a.t-b.t);
   }catch(e){ snaps = []; }
 
-  render(trips, positions, epochs, snaps);
+  render(trips, positions, epochs, snaps, rows, cancelled);
   document.getElementById('stamp').textContent =
     'read ' + new Date().toLocaleTimeString('en-US',{hour12:false});
 }
@@ -622,7 +644,8 @@ function metrics(trips, positions, epochs){
 /* ============================================================
    RENDER
    ============================================================ */
-function render(trips, positions, epochs, snaps){
+function render(trips, positions, epochs, snaps, allRows, cancelled){
+  allRows = allRows || []; cancelled = cancelled || [];
   snaps = snaps || [];
   const latest = snaps.length ? snaps[snaps.length-1] : null;
   const m = metrics(trips, positions, epochs);
@@ -750,18 +773,17 @@ function render(trips, positions, epochs, snaps){
   </section>
 
   <section>
-    <div class="shead"><h2>Open positions</h2><div class="sub">Bought, not yet sold</div></div>
-    <div class="tblwrap"><table class="tt" id="postbl"></table></div>
-  </section>
-
-  <section>
-    <div class="shead"><h2>Trip history</h2>
-      <div class="tabs" role="tablist" id="triptabs">
-        <button class="tab" role="tab" data-n="25" aria-selected="true">LAST 25</button>
-        <button class="tab" role="tab" data-n="all" aria-selected="false">ALL</button>
+    <div class="shead"><h2>Position log</h2>
+      <div class="tabs" role="tablist" id="logtabs">
+        <button class="tab" role="tab" data-f="all" aria-selected="true">ALL</button>
+        <button class="tab" role="tab" data-f="open" aria-selected="false">OPEN</button>
+        <button class="tab" role="tab" data-f="closed" aria-selected="false">CLOSED</button>
+        ${cancelled.length ? '<button class="tab" role="tab" data-f="cancelled" aria-selected="false">CANCELLED</button>' : ''}
       </div>
     </div>
-    <div class="tblwrap"><table class="tt" id="triptbl"></table></div>
+    <div class="logstats" id="logstats"></div>
+    <div class="tblwrap"><table class="tt" id="logtbl"></table></div>
+    <div class="sub" style="margin-top:12px" id="lognote"></div>
   </section>
 
   <footer>
@@ -774,8 +796,7 @@ function render(trips, positions, epochs, snaps){
   drawHist(trips);
   drawLadder(trips, positions, cur);
   drawEpochs(trips, positions, epochs);
-  drawPositions(positions);
-  drawTrips(trips, 25);
+  drawLog(allRows, 'all', latest);
   if(snaps.length>1) drawSnap(snaps);
 
   // grid chart data + controls
@@ -805,11 +826,11 @@ function render(trips, positions, epochs, snaps){
     b.setAttribute('aria-selected','true');
     drawPnl(trips,b.dataset.v);
   });
-  document.getElementById('triptabs').addEventListener('click',e=>{
+  document.getElementById('logtabs').addEventListener('click',e=>{
     const b=e.target.closest('.tab'); if(!b) return;
     [...e.currentTarget.children].forEach(x=>x.setAttribute('aria-selected','false'));
     b.setAttribute('aria-selected','true');
-    drawTrips(trips, b.dataset.n==='all'?Infinity:25);
+    drawLog(allRows, b.dataset.f, latest);
   });
 }
 
@@ -1031,47 +1052,118 @@ function drawEpochs(trips, positions, epochs){
   }).join('');
 }
 
-/* ---------- open positions table ---------- */
-function drawPositions(positions){
-  const t = document.getElementById('postbl');
-  if(!positions.length){
-    t.outerHTML = '<div class="loading">No open positions — everything is closed out.</div>';
+/* ---------- unified position log ---------- */
+function drawLog(rows, filter, latest){
+  const t = document.getElementById('logtbl');
+  const now = Date.now();
+  const price = latest ? latest.price : null;
+
+  const shown = rows.filter(r => filter==='all' ? true : r.status===filter);
+
+  // ---- summary strip ----
+  const opens = rows.filter(r=>r.status==='open');
+  const closed = rows.filter(r=>r.status==='closed');
+  const openDurs = opens.filter(r=>r.buyT).map(r=>now-r.buyT);
+  const closedDurs = closed.filter(r=>r.buyT&&r.sellT).map(r=>r.sellT-r.buyT);
+  const med = a => a.length ? a.slice().sort((x,y)=>x-y)[Math.floor(a.length/2)] : null;
+  const oldest = openDurs.length ? Math.max(...openDurs) : null;
+
+  let unreal = 0, haveUnreal = false;
+  if(price!=null){
+    opens.forEach(r=>{ unreal += (price - r.buyP) * (r.qty||0); });
+    haveUnreal = opens.length>0;
+  }
+
+  const ls = document.getElementById('logstats');
+  if(ls){
+    ls.innerHTML = `
+      <div class="ls"><div class="k">Open</div><div class="v">${opens.length}</div>
+        <div class="n">${med(openDurs)!=null?'median held '+fmtDur(med(openDurs)):'—'}</div></div>
+      <div class="ls"><div class="k">Closed</div><div class="v">${closed.length}</div>
+        <div class="n">${med(closedDurs)!=null?'median '+fmtDur(med(closedDurs))+' to close':'—'}</div></div>
+      <div class="ls"><div class="k">Oldest open</div><div class="v">${oldest!=null?fmtDur(oldest):'—'}</div>
+        <div class="n">Capital tied up longest</div></div>
+      <div class="ls"><div class="k">Unrealized</div>
+        <div class="v" style="color:${!haveUnreal?'var(--mute)':(unreal>=0?'var(--up)':'var(--down)')}">${haveUnreal?usd(unreal):'—'}</div>
+        <div class="n">${haveUnreal?'At '+px(price):'Needs a snapshot'}</div></div>`;
+  }
+
+  // ---- table ----
+  const sorted = shown.slice().sort((a,b)=>{
+    const at = a.status==='open' ? (a.buyT||0) : (a.sellT||a.buyT||0);
+    const bt = b.status==='open' ? (b.buyT||0) : (b.sellT||b.buyT||0);
+    return bt-at;
+  });
+
+  if(!sorted.length){
+    t.innerHTML = '';
+    document.getElementById('lognote').textContent = 'No rows with this status.';
     return;
   }
-  const now = Date.now();
+
   t.innerHTML = `<thead><tr>
-      <th>Bought</th><th>Buy</th><th>Target</th><th>Qty</th><th>Held</th><th>Gain at target</th>
+      <th>#</th><th>Status</th><th>Bought</th><th>Buy</th><th>Target / Sold</th>
+      <th>Qty</th><th>Duration</th><th>Distance</th><th>Fee</th><th>P&amp;L</th>
     </tr></thead><tbody>` +
-    positions.slice().sort((a,b)=>(b.buyT||0)-(a.buyT||0)).map(p=>{
-      const gain = (p.target-p.buyP)*(p.qty||0);
-      return `<tr>
-        <td>${p.buyT?fmtDate(p.buyT):'—'}${p.conf?'':'<span class="pill">UNCONF</span>'}</td>
-        <td>${px(p.buyP)}</td>
-        <td style="color:var(--wire)">${px(p.target)}</td>
-        <td>${num(p.qty||0)}</td>
-        <td>${p.buyT?fmtDur(now-p.buyT):'—'}</td>
-        <td style="color:var(--up)">${usd(gain)}</td>
+    sorted.map(r=>{
+      const isOpen = r.status==='open';
+      const isCanc = r.status==='cancelled';
+      const dur = r.buyT ? (isOpen ? now-r.buyT : (r.sellT ? r.sellT-r.buyT : null)) : null;
+
+      // distance: open -> how far price must move to hit target; closed -> realized move
+      let dist = '—', distCol = 'var(--mute)';
+      if(isOpen && r.target!=null){
+        if(price!=null){
+          const d = ((r.target/price)-1)*100;
+          dist = (d>=0?'+':'') + d.toFixed(2)+'%';
+          distCol = d<=0 ? 'var(--up)' : (d<0.5 ? 'var(--amber)' : 'var(--mute)');
+        }else{
+          const d = ((r.target/r.buyP)-1)*100;
+          dist = '+'+d.toFixed(2)+'% from buy';
+        }
+      }else if(r.status==='closed' && r.sellP!=null){
+        const d = ((r.sellP/r.buyP)-1)*100;
+        dist = (d>=0?'+':'')+d.toFixed(2)+'%';
+        distCol = 'var(--mute)';
+      }
+
+      // P&L: closed -> realized; open -> unrealized at current price
+      let pnl = '—', pnlCol = 'var(--mute)';
+      if(r.status==='closed'){
+        pnl = usd(r.profit); pnlCol = r.profit>=0?'var(--up)':'var(--down)';
+      }else if(isOpen && price!=null && r.qty){
+        const u = (price-r.buyP)*r.qty;
+        pnl = usd(u); pnlCol = u>=0?'var(--up)':'var(--down)';
+      }
+
+      const badge = isOpen ? '<span class="st stopen">OPEN</span>'
+                  : isCanc ? '<span class="st stcanc">CANCELLED</span>'
+                  : '<span class="st stclosed">CLOSED</span>';
+
+      return `<tr${isCanc?' style="opacity:.55"':''}>
+        <td>${r.id||''}${r.conf?'':'<span class="pill">UNCONF</span>'}</td>
+        <td>${badge}</td>
+        <td>${r.buyT?fmtDate(r.buyT):'—'}</td>
+        <td>${px(r.buyP)}</td>
+        <td style="color:${isOpen?'var(--wire)':'var(--paper)'}">${
+          isOpen ? (r.target!=null?px(r.target):'—')
+                 : (r.sellP!=null?px(r.sellP):'—')}</td>
+        <td>${r.qty?num(r.qty):'—'}</td>
+        <td>${dur!=null?fmtDur(dur):'—'}</td>
+        <td style="color:${distCol}">${dist}</td>
+        <td style="color:var(--mute)">${r.fee?usd(r.fee):'—'}</td>
+        <td style="color:${pnlCol}">${pnl}</td>
       </tr>`;
     }).join('') + '</tbody>';
-}
 
-/* ---------- trips table ---------- */
-function drawTrips(trips, n){
-  const t = document.getElementById('triptbl');
-  const rows = trips.slice().reverse().slice(0, n===Infinity?trips.length:n);
-  t.innerHTML = `<thead><tr>
-      <th>#</th><th>Bought</th><th>Sold</th><th>Buy</th><th>Sell</th><th>Held</th><th>Fee</th><th>Profit</th>
-    </tr></thead><tbody>` +
-    rows.map(r=>`<tr>
-      <td>${r.id||''}${r.conf?'':'<span class="pill">UNCONF</span>'}</td>
-      <td>${r.buyT?fmtDate(r.buyT):'—'}</td>
-      <td>${fmtDate(r.sellT)}</td>
-      <td>${r.buyP!=null?px(r.buyP):'—'}</td>
-      <td>${r.sellP!=null?px(r.sellP):'—'}</td>
-      <td>${r.buyT?fmtDur(r.sellT-r.buyT):'—'}</td>
-      <td style="color:var(--mute)">${r.fee?usd(r.fee):'—'}</td>
-      <td style="color:${r.profit>=0?'var(--up)':'var(--down)'}">${usd(r.profit)}</td>
-    </tr>`).join('') + '</tbody>';
+  const n = document.getElementById('lognote');
+  if(n){
+    n.innerHTML = `${sorted.length} row${sorted.length===1?'':'s'}` +
+      (price!=null
+        ? ` · open rows marked to ${px(price)} from the latest snapshot`
+        : ` · add a Snapshots row to see unrealized P&L and live distance-to-target`) +
+      `<br><span style="opacity:.75">Distance on open rows is how far price must move to reach the target; on closed rows it's the move that was realized.</span>`;
+  }
 }
 
 main();
