@@ -41,6 +41,16 @@ header{border-bottom:1px solid var(--line);padding:22px 0;margin-bottom:36px}
   text-align:right;line-height:1.8}
 .heroside b{color:var(--paper);font-weight:600}
 
+/* grid chart */
+.gcwrap{background:var(--slate);border:1px solid var(--line);border-radius:4px;overflow:hidden}
+.gclegend{display:flex;flex-wrap:wrap;gap:16px;padding:12px 16px;border-bottom:1px solid var(--line);
+  font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--mute);letter-spacing:.04em}
+.lg{display:flex;align-items:center;gap:6px}
+.dot{width:7px;height:7px;border-radius:50%}
+.dash{width:16px;height:0;border-top:1.5px dashed}
+.gcbar{display:flex;gap:8px;padding:11px 16px;flex-wrap:wrap;align-items:center;border-bottom:1px solid var(--line)}
+.gchint{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--mute);margin-left:auto}
+
 /* split cards */
 .split{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);margin:0 0 1px}
 .half{background:var(--ink);padding:18px 20px}
@@ -208,6 +218,284 @@ const dt = v => { const d = new Date(v); return isNaN(d) ? null : d; };
 const yes= v => /^(y|yes|true|1)$/i.test((v||'').trim());
 
 /* ============================================================
+   GRID CHART — candles from Coinbase, overlay from the sheet
+   ============================================================ */
+const CB_API = 'https://api.exchange.coinbase.com';
+const CB_PAIR = 'XRP-USD';
+
+const GRANS = {
+  '3h' :{g:300,   span:3,   mode:'grid',  label:'5-minute candles'},
+  '6h' :{g:300,   span:6,   mode:'grid',  label:'5-minute candles'},
+  '12h':{g:900,   span:12,  mode:'grid',  label:'15-minute candles'},
+  '24h':{g:1800,  span:24,  mode:'grid',  label:'30-minute candles'},
+  'Full':{g:21600,span:null, mode:'grid', label:'6-hour candles'},
+  'P24h':{g:1800, span:24,  mode:'price', label:'30-minute candles'},
+  'P1W':{g:3600,  span:168, mode:'price', label:'hourly candles'},
+  'P1M':{g:21600, span:720, mode:'price', label:'6-hour candles'}
+};
+
+let gridState = {range:'Full', mode:'grid', candles:null, gran:null, zoom:null, drag:null};
+let GD = {trips:[], positions:[], epochs:[], openBuys:[]};
+
+async function fetchCandles(gran){
+  const raw = await (await fetch(`${CB_API}/products/${CB_PAIR}/candles?granularity=${gran}`)).json();
+  if(!Array.isArray(raw)) throw new Error('candle fetch failed');
+  // [time, low, high, open, close, volume]
+  return raw.map(r=>({t:r[0]*1000, l:r[1], h:r[2], o:r[3], c:r[4], v:r[5]}))
+            .sort((a,b)=>a.t-b.t);
+}
+
+function gridLevels(ep){
+  if(!ep || ep.low==null || ep.high==null || !ep.count || ep.count<2) return [];
+  const step = (ep.high-ep.low)/(ep.count-1);
+  return Array.from({length:ep.count},(_,i)=>+(ep.low+i*step).toFixed(6));
+}
+
+async function loadGridChart(range){
+  const host = document.getElementById('gridChart');
+  if(!host) return;
+  gridState.range = range || gridState.range;
+  const cfg = GRANS[gridState.range];
+  gridState.mode = cfg.mode;
+  gridState.zoom = null;
+
+  host.innerHTML = `<div class="loading" style="padding:60px 0;text-align:center">Loading candles…</div>`;
+  try{
+    if(gridState.gran !== cfg.g){
+      gridState.candles = await fetchCandles(cfg.g);
+      gridState.gran = cfg.g;
+    }
+    drawGrid();
+  }catch(e){
+    host.innerHTML = `<div class="err">Candles unavailable — ${e.message}</div>`;
+  }
+}
+
+function drawGrid(){
+  const host = document.getElementById('gridChart');
+  const cfg = GRANS[gridState.range];
+  const all = gridState.candles || [];
+  if(!all.length){ host.innerHTML = '<div class="err">No candle data.</div>'; return; }
+
+  const now = all[all.length-1].t;
+  let t0, t1;
+  if(gridState.zoom){
+    [t0,t1] = gridState.zoom;
+  }else if(cfg.span){
+    t1 = now + cfg.g*1000;            // one blank bar of headroom
+    t0 = t1 - cfg.span*3600000;
+  }else{
+    // Full = from first grid activity (or first candle) to now
+    const marks = [...GD.trips.map(x=>x.buyT&&x.buyT.getTime()),
+                   ...GD.positions.map(x=>x.buyT&&x.buyT.getTime())].filter(Boolean);
+    const earliest = marks.length ? Math.min(...marks) : all[0].t;
+    t0 = Math.max(all[0].t, earliest - cfg.g*1000*2);
+    t1 = now + cfg.g*1000;
+  }
+
+  const vis = all.filter(c=>c.t>=t0 && c.t<=t1);
+  if(!vis.length){ host.innerHTML = '<div class="err">No candles in this window. Try a wider range.</div>'; return; }
+
+  // ---- y domain ----
+  let lo = Math.min(...vis.map(c=>c.l)), hi = Math.max(...vis.map(c=>c.h));
+  const curEp = GD.epochs.find(e=>!e.to) || GD.epochs[GD.epochs.length-1];
+
+  if(gridState.mode==='grid'){
+    // include grid levels of any epoch overlapping the window
+    GD.epochs.forEach(ep=>{
+      const a = ep.from?ep.from.getTime():-Infinity, b = ep.to?ep.to.getTime():Infinity;
+      if(b>=t0 && a<=t1){ gridLevels(ep).forEach(L=>{ lo=Math.min(lo,L); hi=Math.max(hi,L); }); }
+    });
+  }
+  const pad = (hi-lo)*0.10 || 0.005;
+  lo -= pad; hi += pad;
+
+  // ---- geometry ----
+  const W = 1000, H = 420;
+  const M = {l:10, r:74, t:16, b:34};
+  const iw = W-M.l-M.r, ih = H-M.t-M.b;
+  const X = t => M.l + ((t-t0)/(t1-t0))*iw;
+  const Y = p => M.t + (1-((p-lo)/(hi-lo)))*ih;
+  const bw = Math.max(1.4, Math.min(11, (iw/((t1-t0)/(cfg.g*1000)))*0.62));
+
+  const esc = s => String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  let svg = `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" id="gsvg"
+    style="width:100%;height:${H}px;display:block;cursor:${gridState.zoom?'grab':'crosshair'};touch-action:none">`;
+
+  // ---- y gridlines + labels ----
+  const yTicks = 6;
+  for(let i=0;i<=yTicks;i++){
+    const p = lo + (hi-lo)*(i/yTicks), y = Y(p);
+    svg += `<line x1="${M.l}" x2="${W-M.r}" y1="${y}" y2="${y}" stroke="#1a2029" stroke-width="1"/>
+      <text x="${W-M.r+7}" y="${y+3.5}" fill="#5a6470" font-size="10" font-family="IBM Plex Mono,monospace">${p.toFixed(4)}</text>`;
+  }
+
+  // ---- x ticks ----
+  const xTicks = 7;
+  for(let i=0;i<=xTicks;i++){
+    const t = t0 + (t1-t0)*(i/xTicks), x = X(t), d = new Date(t);
+    const lab = (t1-t0) > 5*86400000
+      ? d.toLocaleDateString('en-US',{month:'short',day:'numeric'})
+      : d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',hour12:false});
+    svg += `<line x1="${x}" x2="${x}" y1="${M.t}" y2="${H-M.b}" stroke="#151b23" stroke-width="1"/>
+      <text x="${x}" y="${H-M.b+16}" fill="#5a6470" font-size="9.5" text-anchor="middle" font-family="IBM Plex Mono,monospace">${lab}</text>`;
+  }
+
+  // ---- epoch grid levels (bounded segments) ----
+  GD.epochs.forEach(ep=>{
+    const a = ep.from?ep.from.getTime():t0, b = ep.to?ep.to.getTime():t1;
+    if(b < t0 || a > t1) return;
+    const sx = X(Math.max(a,t0)), ex = X(Math.min(b,t1));
+    const isCur = !ep.to;
+    const col = isCur ? '#5B8DEF' : '#3d4652';
+    gridLevels(ep).forEach(L=>{
+      if(L<lo||L>hi) return;
+      const y = Y(L);
+      svg += `<line x1="${sx}" x2="${ex}" y1="${y}" y2="${y}" stroke="${col}"
+        stroke-width="${isCur?1.1:0.9}" stroke-dasharray="${isCur?'':'2 3'}" opacity="${isCur?0.55:0.4}"/>`;
+      if(isCur){
+        svg += `<text x="${W-M.r-4}" y="${y-4}" fill="${col}" font-size="9" text-anchor="end"
+          font-family="IBM Plex Mono,monospace" opacity="0.8">${L.toFixed(4)}</text>`;
+      }
+    });
+    // epoch boundary marker
+    if(ep.from && ep.from.getTime()>t0 && ep.from.getTime()<t1 && GD.epochs.length>1){
+      const bx = X(ep.from.getTime());
+      svg += `<line x1="${bx}" x2="${bx}" y1="${M.t}" y2="${H-M.b}" stroke="#D9A441"
+        stroke-width="1" stroke-dasharray="4 3" opacity="0.6"/>
+        <text x="${bx+5}" y="${M.t+12}" fill="#D9A441" font-size="9"
+        font-family="IBM Plex Mono,monospace">⟳ ${esc(ep.label)}</text>`;
+    }
+  });
+
+  // ---- candles ----
+  vis.forEach(c=>{
+    const x = X(c.t), up = c.c>=c.o;
+    const col = up ? '#c7d2e0' : '#4a5666';
+    const yO = Y(c.o), yC = Y(c.c);
+    const top = Math.min(yO,yC), hgt = Math.max(1, Math.abs(yC-yO));
+    svg += `<line x1="${x}" x2="${x}" y1="${Y(c.h)}" y2="${Y(c.l)}" stroke="${col}" stroke-width="1"/>
+      <rect x="${x-bw/2}" y="${top}" width="${bw}" height="${hgt}" fill="${up?'none':col}"
+        stroke="${col}" stroke-width="1"/>`;
+  });
+
+  // ---- completed round trips ----
+  GD.trips.forEach(tr=>{
+    if(!tr.buyT||!tr.sellT) return;
+    const bt = tr.buyT.getTime(), st = tr.sellT.getTime();
+    if(st < t0 || bt > t1) return;
+    const bx=X(bt), by=Y(tr.buyP), sx=X(st), sy=Y(tr.sellP);
+    const inView = p => p>=lo && p<=hi;
+    if(inView(tr.buyP) && inView(tr.sellP)){
+      svg += `<line x1="${bx}" y1="${by}" x2="${sx}" y2="${sy}" stroke="#3FB68B"
+        stroke-width="1" stroke-dasharray="2 2.5" opacity="0.55"/>`;
+    }
+    if(inView(tr.buyP)) svg += `<circle cx="${bx}" cy="${by}" r="3.4" fill="#D9A441"
+      stroke="#0E1116" stroke-width="1"/>`;
+    if(inView(tr.sellP)){
+      svg += `<circle cx="${sx}" cy="${sy}" r="3.4" fill="#3FB68B" stroke="#0E1116" stroke-width="1"/>
+        <text x="${sx-6}" y="${sy-7}" fill="#3FB68B" font-size="9" text-anchor="end"
+        font-family="IBM Plex Mono,monospace" font-weight="600">#${esc(tr.id)} +$${tr.profit.toFixed(2)}</text>`;
+    }
+  });
+
+  // ---- open positions: buy dot + bounded target segment ----
+  GD.positions.forEach(p=>{
+    if(!p.buyT) return;
+    const bt = p.buyT.getTime();
+    if(bt > t1) return;
+    const bx = X(Math.max(bt,t0)), by = Y(p.buyP), ty = Y(p.target);
+    if(p.buyP>=lo && p.buyP<=hi){
+      svg += `<circle cx="${bx}" cy="${by}" r="3.4" fill="#D9A441" stroke="#0E1116" stroke-width="1"/>`;
+    }
+    if(p.target>=lo && p.target<=hi){
+      const ex = X(t1);
+      svg += `<line x1="${bx}" y1="${ty}" x2="${ex}" y2="${ty}" stroke="#5B8DEF"
+        stroke-width="1.3" stroke-dasharray="5 3" opacity="0.85"/>
+        <text x="${bx+7}" y="${ty-6}" fill="#5B8DEF" font-size="9.5"
+        font-family="IBM Plex Mono,monospace">to be sold @ ${p.target.toFixed(4)}</text>`;
+      if(p.buyP>=lo&&p.buyP<=hi){
+        svg += `<line x1="${bx}" y1="${by}" x2="${bx}" y2="${ty}" stroke="#5B8DEF"
+          stroke-width="0.8" stroke-dasharray="1.5 2" opacity="0.45"/>`;
+      }
+    }
+  });
+
+  // ---- open buy orders (rays across full width) ----
+  GD.openBuys.forEach(L=>{
+    if(L<lo||L>hi) return;
+    const y = Y(L);
+    svg += `<line x1="${M.l}" x2="${W-M.r}" y1="${y}" y2="${y}" stroke="#D9A441"
+      stroke-width="1.3" stroke-dasharray="7 4" opacity="0.9"/>
+      <text x="${M.l+6}" y="${y-6}" fill="#D9A441" font-size="9.5" font-weight="600"
+      font-family="IBM Plex Mono,monospace">OPEN BUY ORDER ${L.toFixed(4)}</text>
+      <text x="${W-M.r-6}" y="${y-6}" fill="#D9A441" font-size="11" text-anchor="end">»</text>`;
+  });
+
+  // ---- last price ----
+  const last = vis[vis.length-1];
+  if(last){
+    const y = Y(last.c);
+    svg += `<line x1="${M.l}" x2="${W-M.r}" y1="${y}" y2="${y}" stroke="#E5643E" stroke-width="1" opacity="0.85"/>
+      <rect x="${W-M.r+2}" y="${y-8}" width="${M.r-4}" height="16" fill="#E5643E" rx="2"/>
+      <text x="${W-M.r+7}" y="${y+4}" fill="#0E1116" font-size="10" font-weight="700"
+      font-family="IBM Plex Mono,monospace">${last.c.toFixed(4)}</text>`;
+  }
+
+  svg += `</svg>`;
+  host.innerHTML = svg;
+  wireGridInteraction(t0, t1, all);
+
+  const note = document.getElementById('gridNote');
+  if(note){
+    note.innerHTML = `${cfg.label} from Coinbase · overlay from the sheet` +
+      (gridState.zoom ? ' · <b>zoomed</b>' : '') +
+      `<br><span style="opacity:.75">Markers come from confirmed Webot rows, candles from Coinbase — the two feeds can differ slightly, so a marker may sit just off the candle that triggered it.</span>`;
+  }
+}
+
+function wireGridInteraction(t0, t1, all){
+  const svg = document.getElementById('gsvg');
+  if(!svg) return;
+  const span = t1-t0;
+
+  svg.addEventListener('wheel', e=>{
+    e.preventDefault();
+    const r = svg.getBoundingClientRect();
+    const frac = (e.clientX-r.left)/r.width;
+    const anchor = t0 + span*frac;
+    const k = e.deltaY>0 ? 1.18 : 0.85;
+    const ns = Math.max(GRANS[gridState.range].g*1000*6, span*k);
+    let n0 = anchor-(anchor-t0)*(ns/span), n1 = n0+ns;
+    const dataMin = all[0].t, dataMax = all[all.length-1].t + GRANS[gridState.range].g*1000;
+    if(n0 < dataMin){ n0 = dataMin; n1 = n0+ns; }
+    if(n1 > dataMax){ n1 = dataMax; n0 = n1-ns; }
+    gridState.zoom = [n0,n1];
+    drawGrid();
+  }, {passive:false});
+
+  let dragging=false, startX=0, s0=0, s1=0;
+  svg.addEventListener('pointerdown', e=>{
+    dragging=true; startX=e.clientX; s0=t0; s1=t1;
+    svg.setPointerCapture(e.pointerId); svg.style.cursor='grabbing';
+  });
+  svg.addEventListener('pointermove', e=>{
+    if(!dragging) return;
+    const r = svg.getBoundingClientRect();
+    const dt = -((e.clientX-startX)/r.width)*(s1-s0);
+    gridState.zoom = [s0+dt, s1+dt];
+    drawGrid();
+  });
+  const end = e=>{ if(!dragging) return; dragging=false;
+    try{svg.releasePointerCapture(e.pointerId);}catch(_){}
+    svg.style.cursor='grab'; };
+  svg.addEventListener('pointerup', end);
+  svg.addEventListener('pointercancel', end);
+
+  svg.addEventListener('dblclick', ()=>{ gridState.zoom=null; drawGrid(); });
+}
+
+/* ============================================================
    MAIN
    ============================================================ */
 let charts = {};
@@ -365,6 +653,27 @@ function render(trips, positions, epochs, snaps){
   </div>
 
   <section>
+    <div class="shead"><h2>Grid activity</h2>
+      <div class="tabs" role="tablist" id="gmodetabs">
+        <button class="tab" role="tab" data-mode="grid" aria-selected="true">GRID DETAIL</button>
+        <button class="tab" role="tab" data-mode="price" aria-selected="false">PRICE HISTORY</button>
+      </div>
+    </div>
+    <div class="gcwrap">
+      <div class="gclegend">
+        <span class="lg"><span class="dot" style="background:#D9A441"></span>buy fill</span>
+        <span class="lg"><span class="dot" style="background:#3FB68B"></span>completed round trip</span>
+        <span class="lg"><span class="dash" style="border-color:#5B8DEF"></span>open sell target</span>
+        <span class="lg"><span class="dash" style="border-color:#D9A441"></span>open buy order</span>
+        <span class="lg"><span class="dash" style="border-color:#3d4652"></span>past epoch levels</span>
+      </div>
+      <div class="gcbar" id="grangebar"></div>
+      <div id="gridChart"><div class="loading" style="padding:60px 0;text-align:center">Loading candles…</div></div>
+    </div>
+    <div class="sub" style="margin-top:10px" id="gridNote"></div>
+  </section>
+
+  <section>
     <div class="shead"><h2>Cumulative realized P&amp;L</h2>
       <div class="tabs" role="tablist" id="pnltabs">
         <button class="tab" role="tab" data-v="cum" aria-selected="true">CUMULATIVE</button>
@@ -447,6 +756,27 @@ function render(trips, positions, epochs, snaps){
   drawPositions(positions);
   drawTrips(trips, 25);
   if(snaps.length>1) drawSnap(snaps);
+
+  // grid chart data + controls
+  GD.trips = trips; GD.positions = positions; GD.epochs = epochs;
+  const heldTargets = new Set(positions.map(p=>p.target?.toFixed(4)));
+  GD.openBuys = gridLevels(cur).filter(L=>{
+    const k = L.toFixed(4);
+    // a level is an open buy order if we're not holding a position bought there
+    return !positions.some(p=>p.buyP?.toFixed(4)===k) && !heldTargets.has(k);
+  }).filter(L=> cur && L < (latest ? latest.price : Infinity));
+
+  renderRangeBar();
+  loadGridChart('Full');
+
+  document.getElementById('gmodetabs').addEventListener('click',e=>{
+    const b=e.target.closest('.tab'); if(!b) return;
+    [...e.currentTarget.children].forEach(x=>x.setAttribute('aria-selected','false'));
+    b.setAttribute('aria-selected','true');
+    gridState.mode = b.dataset.mode;
+    renderRangeBar();
+    loadGridChart(b.dataset.mode==='grid' ? 'Full' : 'P1W');
+  });
 
   document.getElementById('pnltabs').addEventListener('click',e=>{
     const b=e.target.closest('.tab'); if(!b) return;
@@ -535,6 +865,28 @@ function drawPnl(trips, view){
     const avg = keys.length ? keys.reduce((s,k)=>s+byDay[k],0)/keys.length : 0;
     note.textContent = `${keys.length} active days · ${usd(avg)} average`;
   }
+}
+
+/* ---------- grid range bar ---------- */
+function renderRangeBar(){
+  const bar = document.getElementById('grangebar');
+  if(!bar) return;
+  const opts = gridState.mode==='grid'
+    ? [['3h','3H'],['6h','6H'],['12h','12H'],['24h','24H'],['Full','FULL']]
+    : [['P24h','24H'],['P1W','1 WEEK'],['P1M','1 MONTH']];
+  bar.innerHTML = `<div class="tabs" role="tablist" id="grangetabs">` +
+    opts.map(([k,l])=>`<button class="tab" role="tab" data-r="${k}"
+      aria-selected="${k===gridState.range}">${l}</button>`).join('') +
+    `</div>
+    <button class="tab" id="gzreset" style="background:var(--slate);border:1px solid var(--line)">RESET ZOOM</button>
+    <span class="gchint">scroll to zoom · drag to pan · double-click to reset</span>`;
+  bar.querySelector('#grangetabs').addEventListener('click',e=>{
+    const b=e.target.closest('.tab'); if(!b) return;
+    [...e.currentTarget.children].forEach(x=>x.setAttribute('aria-selected','false'));
+    b.setAttribute('aria-selected','true');
+    loadGridChart(b.dataset.r);
+  });
+  bar.querySelector('#gzreset').addEventListener('click',()=>{ gridState.zoom=null; drawGrid(); });
 }
 
 /* ---------- snapshot trend ---------- */
